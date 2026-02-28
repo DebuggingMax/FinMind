@@ -1,109 +1,223 @@
-# Tilt Local Development
+# Tilt Local Kubernetes Development
 
-[Tilt](https://tilt.dev/) provides fast, iterative local Kubernetes development with live updates.
+Tilt provides a seamless local Kubernetes development experience with live-reload, log aggregation, and one-command setup.
 
 ## Prerequisites
 
-1. **Kubernetes cluster** (any of):
-   - Docker Desktop with Kubernetes enabled
-   - Rancher Desktop
-   - minikube
-   - kind
+1. **Docker Desktop** or **Rancher Desktop** with Kubernetes enabled
+2. **Tilt** - Install from [https://docs.tilt.dev/install.html](https://docs.tilt.dev/install.html)
+3. **kubectl** - Kubernetes CLI
 
-2. **Tilt CLI**:
-   ```bash
-   # macOS
-   brew install tilt
-   
-   # Linux
-   curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
-   
-   # Windows
-   scoop install tilt
-   ```
-
-## Quick Start
-
+### Quick Install (macOS)
 ```bash
-# 1. Copy secrets
-cp deploy/k8s/secrets.example.yaml deploy/k8s/secrets.yaml
-# Edit deploy/k8s/secrets.yaml with real values
-
-# 2. Start Tilt
-tilt up
-
-# 3. Open Tilt UI
-# Tilt automatically opens http://localhost:10350
+brew install tilt-dev/tap/tilt
 ```
 
-## Features
+### Quick Install (Linux)
+```bash
+curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
+```
 
-### Live Updates
-- Backend code changes sync instantly without rebuild
-- Frontend hot-reload works automatically
-- Dependency changes trigger rebuild
+### Quick Install (Windows)
+```powershell
+iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.ps1'))
+```
 
-### Port Forwards
-| Service | Local Port |
-|---------|------------|
-| Backend | 8000 |
-| Nginx | 8080 |
-| PostgreSQL | 5432 |
-| Redis | 6379 |
-| Grafana | 3000 |
-| Prometheus | 9090 |
+## Setup
 
-### Manual Triggers
-From Tilt UI (http://localhost:10350):
+1. **Enable Kubernetes** in Docker Desktop/Rancher Desktop
+   - Docker Desktop: Settings → Kubernetes → Enable Kubernetes
+   - Rancher Desktop: Already enabled by default
+
+2. **Create secrets file**:
+   ```bash
+   cp deploy/k8s/secrets.example.yaml deploy/k8s/secrets.yaml
+   ```
+
+3. **Edit secrets** with your values:
+   ```yaml
+   # deploy/k8s/secrets.yaml
+   data:
+     JWT_SECRET: <base64-encoded-secret>
+     POSTGRES_USER: ZmlubWluZA==  # finmind
+     POSTGRES_PASSWORD: <base64-encoded-password>
+     POSTGRES_DB: ZmlubWluZA==    # finmind
+     GEMINI_API_KEY: <base64-encoded-api-key>
+   ```
+   
+   Generate base64:
+   ```bash
+   echo -n "your-secret" | base64
+   ```
+
+## Running
+
+From the project root:
+
+```bash
+tilt up
+```
+
+This will:
+- Build Docker images for backend and frontend
+- Deploy all Kubernetes resources
+- Set up port forwards
+- Watch for code changes and live-reload
+
+## Access
+
+| Service | URL |
+|---------|-----|
+| **Backend API** | http://localhost:8000 |
+| **Nginx Proxy** | http://localhost:8080 |
+| **PostgreSQL** | localhost:5432 |
+| **Redis** | localhost:6379 |
+| **Tilt Dashboard** | http://localhost:10350 |
+
+With monitoring enabled:
+| Service | URL |
+|---------|-----|
+| **Grafana** | http://localhost:3000 |
+| **Prometheus** | http://localhost:9090 |
+
+## Development Workflow
+
+### Live Reload
+
+Tilt automatically syncs changes:
+- **Backend**: Changes to `packages/backend/app/` are synced live
+- **Frontend**: Changes to `app/src/` are synced live
+
+No rebuild needed for most changes!
+
+### Manual Actions
+
+In the Tilt dashboard (http://localhost:10350):
+- Click **Trigger Update** on any resource to force rebuild
+- Run **backend-tests** or **frontend-tests** manually
+- View logs for all services in one place
+
+### Running Tests
+
+From Tilt dashboard, trigger:
 - `backend-tests` - Run pytest
-- `frontend-tests` - Run vitest
+- `frontend-tests` - Run npm test
+
+Or via command line:
+```bash
+# Backend tests
+docker compose exec backend pytest tests/ -v
+
+# Frontend tests
+docker compose exec frontend-dev npm test
+```
 
 ## Configuration
 
-### Production Mode
+### Enable Production Mode
+
 ```bash
 tilt up -- --production
 ```
-This enables the full monitoring stack.
 
-### Custom Cluster
-```bash
-# minikube
-minikube start
-tilt up
+This enables the monitoring stack (Prometheus, Grafana).
 
-# kind
-kind create cluster --name finmind
-tilt up
+### Custom Image Registry
+
+Edit the `Tiltfile` to push images to your registry:
+```python
+docker_build(
+    'your-registry/finmind-backend',
+    context='./packages/backend',
+    ...
+)
 ```
 
-## Workflow
+### Resource Dependencies
 
-1. Make code changes
-2. Tilt detects changes and syncs/rebuilds
-3. Pod restarts with new code
-4. Test at localhost:8000
+The Tiltfile defines dependencies:
+```
+postgres → backend → nginx
+redis   ↗
+```
+
+Tilt ensures services start in the correct order.
 
 ## Troubleshooting
 
+### Kubernetes Not Running
 ```bash
-# View logs
-tilt logs backend
+# Check kubectl context
+kubectl config current-context
 
-# Restart resource
-tilt trigger backend
+# Should show: docker-desktop or rancher-desktop
+```
 
-# Clean up
-tilt down
+### Image Build Fails
+```bash
+# Check Docker is running
+docker info
+
+# Manually build to see errors
+docker build -t finmind-backend ./packages/backend
+```
+
+### Pods Not Starting
+```bash
+# Check pod status
+kubectl get pods -n finmind
+
+# View pod logs
+kubectl logs -n finmind deployment/backend
+
+# Describe pod for events
+kubectl describe pod -n finmind -l app=backend
+```
+
+### Port Already in Use
+```bash
+# Find process using port
+lsof -i :8000
+
+# Kill it or change port in Tiltfile
+kill -9 <PID>
+```
+
+## Cleanup
+
+Stop Tilt with `Ctrl+C`, then:
+
+```bash
+# Remove all Kubernetes resources
 kubectl delete namespace finmind
+
+# Or just the app resources
+kubectl delete -f deploy/k8s/app-stack.yaml
 ```
 
-## Commands
+## Comparison: Tilt vs Docker Compose
 
-```bash
-tilt up           # Start development
-tilt down         # Stop and clean up
-tilt logs <name>  # View resource logs
-tilt trigger <n>  # Force rebuild
-tilt args -- --production  # Set flags
-```
+| Feature | Tilt | Docker Compose |
+|---------|------|----------------|
+| **Environment** | Kubernetes (local/remote) | Docker only |
+| **Live Reload** | Yes, with sync | Needs volume mounts |
+| **Production Parity** | High (same K8s manifests) | Medium |
+| **Dashboard** | Rich web UI | CLI only |
+| **Multi-service Logs** | Aggregated | Separate |
+| **Learning Curve** | Medium | Low |
+
+**Use Tilt when:**
+- You deploy to Kubernetes in production
+- You want to test Kubernetes features locally
+- Your team needs a unified K8s workflow
+
+**Use Docker Compose when:**
+- You want the simplest setup
+- You don't use Kubernetes in production
+- You need quick local iteration
+
+## Resources
+
+- [Tilt Documentation](https://docs.tilt.dev/)
+- [Tiltfile API Reference](https://docs.tilt.dev/api.html)
+- [Example Tiltfiles](https://github.com/tilt-dev/tilt-example-html)
